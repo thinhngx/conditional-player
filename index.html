@@ -645,37 +645,31 @@
 
 </div><!-- end .player-outer -->
 
+<!-- Hidden SoundCloud widget iframe (must be in DOM for audio to work) -->
+<iframe id="sc-iframe"
+  src="https://w.soundcloud.com/player/?url=https%3A//soundcloud.com/larryfisherman/sets/swimming&auto_play=false&buying=false&liking=false&download=false&sharing=false&show_comments=false&show_user=false&hide_related=true&visual=false&callback=true"
+  style="position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;border:0;"
+  allow="autoplay"
+  scrolling="no">
+</iframe>
+
+<script src="https://w.soundcloud.com/player/api.js"></script>
 <script>
-  // ─── Track Data ────────────────────────────────────
-  const tracks = [
-    {
-      title: "places to be",
-      artist: "Fred Again, Anderson Paak, CHIKA",
-      duration: 226,
-      cover: "https://workers.paper.design/file-assets/01KFN41NB612MZNXD1ZC10R7R0/2F2ACY94RPXP43EPQ15JXHWXDG.jpg",
-      color: "#7B9EAE"
-    },
-    {
-      title: "Novacane",
-      artist: "Frank Ocean",
-      duration: 302,
-      cover: "https://workers.paper.design/file-assets/01KFN41NB612MZNXD1ZC10R7R0/624ME3YQJ1N0XNNZBMPXB7J07K.jpg",
-      color: "#8C6D44"
-    },
-    {
-      title: "Dolly Dagger",
-      artist: "Jimi Hendrix",
-      duration: 248,
-      cover: "https://workers.paper.design/file-assets/01KFN41NB612MZNXD1ZC10R7R0/79RJBY5HB0ECZ93K6Z5A6TG6T6.jpg",
-      color: "#6A5478"
-    }
+  // ─── Track colors (fallback while art loads / if no art) ───
+  const TRACK_COLORS = [
+    '#5B7A94','#7B8E7A','#8C6D44','#6A5478','#4A7B6A',
+    '#7A5444','#4A5A7B','#8A7B4A','#6A4A5A','#5A6A4A',
+    '#7B5A4A','#4A6A7B','#7B4A6A'
   ];
 
   // ─── State ─────────────────────────────────────────
+  let tracks = [];
+  let widget = null;
+
   const state = {
     index: 0,
-    playing: true,
-    currentTime: 143,
+    playing: false,
+    currentTime: 0,
     shuffle: false,
     liked: false,
     mini: false,
@@ -683,8 +677,6 @@
     fullQueueOpen: false,
     dragging: false,
   };
-
-  let ticker = null;
 
   // ─── DOM Refs ──────────────────────────────────────
   const playerEl        = document.getElementById('player');
@@ -721,9 +713,22 @@
     return Math.min(max, Math.max(min, v));
   }
 
+  function shuffleNext() {
+    if (tracks.length <= 1) return 0;
+    let next;
+    do { next = Math.floor(Math.random() * tracks.length); }
+    while (next === state.index);
+    return next;
+  }
+
   // ─── Render ────────────────────────────────────────
   function renderTrack() {
     const t = tracks[state.index];
+    if (!t) {
+      trackTitle.textContent  = 'Loading…';
+      trackArtist.textContent = '';
+      return;
+    }
     trackTitle.textContent  = t.title;
     trackArtist.textContent = t.artist;
     totalTimeEl.textContent = fmt(t.duration);
@@ -747,6 +752,7 @@
 
   function renderProgress() {
     const t = tracks[state.index];
+    if (!t) return;
     const pct = clamp((state.currentTime / t.duration) * 100, 0, 100);
     progressFill.style.width = `${pct}%`;
     progressThumb.style.left = `${pct}%`;
@@ -765,42 +771,6 @@
     }
   }
 
-  function renderFullQueuePanel() {
-    queuePanelInner.innerHTML = '';
-    tracks.forEach((t, i) => {
-      const item = document.createElement('div');
-      item.className = `queue-panel-item${i === state.index ? ' current' : ''}`;
-
-      const thumb = document.createElement('div');
-      thumb.className = 'queue-panel-thumb';
-      thumb.style.background = t.color;
-      if (t.cover) {
-        const img = document.createElement('img');
-        img.src = t.cover;
-        img.alt = '';
-        thumb.appendChild(img);
-      }
-
-      const info = document.createElement('div');
-      info.className = 'queue-panel-info';
-      info.innerHTML = `
-        <div class="queue-panel-title">${t.title}</div>
-        <div class="queue-panel-artist">${t.artist}</div>
-      `;
-
-      item.appendChild(thumb);
-      item.appendChild(info);
-      item.addEventListener('click', () => loadTrack(i, true));
-      queuePanelInner.appendChild(item);
-    });
-  }
-
-  function setFullQueueOpen(open) {
-    state.fullQueueOpen = open;
-    queuePanel.classList.toggle('open', open);
-    playerEl.classList.toggle('queue-open', open);
-  }
-
   function renderQueue() {
     queueEl.innerHTML = '';
     tracks.forEach((t, i) => {
@@ -812,63 +782,110 @@
       thumb.style.background = t.color;
       if (t.cover) {
         const img = document.createElement('img');
-        img.src = t.cover;
-        img.alt = '';
+        img.src = t.cover; img.alt = '';
         thumb.appendChild(img);
       }
 
       const info = document.createElement('div');
       info.className = 'queue-info';
-      info.innerHTML = `
-        <div class="queue-item-title">${t.title}</div>
-        <div class="queue-item-artist">${t.artist}</div>
-      `;
+      info.innerHTML = `<div class="queue-item-title">${t.title}</div><div class="queue-item-artist">${t.artist}</div>`;
 
       item.appendChild(thumb);
       item.appendChild(info);
-      item.addEventListener('click', () => loadTrack(i, true));
+      item.addEventListener('click', () => { if (widget) widget.skip(i); });
       queueEl.appendChild(item);
     });
   }
 
-  // ─── Playback ──────────────────────────────────────
-  function startTicker() {
-    clearInterval(ticker);
-    ticker = setInterval(() => {
-      if (!state.playing || state.dragging) return;
-      state.currentTime += 1;
-      if (state.currentTime >= tracks[state.index].duration) {
-        advance();
-      } else {
-        renderProgress();
+  function renderFullQueuePanel() {
+    queuePanelInner.innerHTML = '';
+    tracks.forEach((t, i) => {
+      const item = document.createElement('div');
+      item.className = `queue-panel-item${i === state.index ? ' current' : ''}`;
+
+      const thumb = document.createElement('div');
+      thumb.className = 'queue-panel-thumb';
+      thumb.style.background = t.color;
+      if (t.cover) {
+        const img = document.createElement('img');
+        img.src = t.cover; img.alt = '';
+        thumb.appendChild(img);
       }
-    }, 1000);
+
+      const info = document.createElement('div');
+      info.className = 'queue-panel-info';
+      info.innerHTML = `<div class="queue-panel-title">${t.title}</div><div class="queue-panel-artist">${t.artist}</div>`;
+
+      item.appendChild(thumb);
+      item.appendChild(info);
+      item.addEventListener('click', () => { if (widget) widget.skip(i); });
+      queuePanelInner.appendChild(item);
+    });
   }
 
-  function loadTrack(index, autoplay = true) {
-    state.index       = index;
-    state.currentTime = 0;
-    state.playing     = autoplay;
-    renderTrack();
-    renderPlayState();
-    if (state.playing) startTicker();
-    else clearInterval(ticker);
+  // ─── SoundCloud Widget ─────────────────────────────
+  function initWidget() {
+    widget = SC.Widget(document.getElementById('sc-iframe'));
+
+    widget.bind(SC.Widget.Events.READY, () => {
+      widget.getSounds((sounds) => {
+        tracks = sounds.map((s, i) => ({
+          title:    s.title,
+          artist:   s.user ? s.user.username : 'Mac Miller',
+          duration: Math.round(s.duration / 1000),
+          cover:    s.artwork_url ? s.artwork_url.replace('-large', '-t500x500') : null,
+          color:    TRACK_COLORS[i % TRACK_COLORS.length],
+        }));
+        state.index = 0;
+        state.currentTime = 0;
+        renderTrack();
+        renderPlayState();
+      });
+    });
+
+    // Fires whenever a track starts playing (including after skip/next/prev)
+    widget.bind(SC.Widget.Events.PLAY, () => {
+      widget.getCurrentSoundIndex((i) => {
+        const idx = typeof i === 'number' ? i : state.index;
+        if (idx !== state.index) {
+          state.index = idx;
+          state.currentTime = 0;
+          renderTrack();
+        }
+        state.playing = true;
+        renderPlayState();
+      });
+    });
+
+    widget.bind(SC.Widget.Events.PAUSE, () => {
+      state.playing = false;
+      renderPlayState();
+    });
+
+    // ~250ms interval progress updates from the widget
+    widget.bind(SC.Widget.Events.PLAY_PROGRESS, (e) => {
+      if (state.dragging) return;
+      state.currentTime = Math.round(e.currentPosition / 1000);
+      renderProgress();
+    });
+
+    // Track finished — handle shuffle manually; otherwise widget auto-advances
+    widget.bind(SC.Widget.Events.FINISH, () => {
+      if (state.shuffle) {
+        widget.skip(shuffleNext());
+      }
+      // non-shuffle: SC widget auto-plays next track, PLAY event fires
+    });
   }
 
-  function advance() {
-    let next;
-    if (state.shuffle) {
-      do { next = Math.floor(Math.random() * tracks.length); }
-      while (next === state.index && tracks.length > 1);
-    } else {
-      next = (state.index + 1) % tracks.length;
-    }
-    loadTrack(next, true);
-  }
-
+  // ─── Seek ──────────────────────────────────────────
   function seekByPct(pct) {
     pct = clamp(pct, 0, 1);
-    state.currentTime = Math.round(pct * tracks[state.index].duration);
+    const t = tracks[state.index];
+    if (!t) return;
+    const ms = Math.round(pct * t.duration * 1000);
+    if (widget) widget.seekTo(ms);
+    state.currentTime = Math.round(pct * t.duration);
     renderProgress();
   }
 
@@ -882,10 +899,8 @@
     state.mini = mini;
     playerEl.classList.toggle('mini', mini);
     collapseBtn.setAttribute('aria-label', mini ? 'Expand to full player' : 'Collapse to mini player');
-
-    // Close mini queue when expanding, close full queue when collapsing
-    if (!mini && state.queueOpen) setQueueOpen(false);
-    if (mini && state.fullQueueOpen) setFullQueueOpen(false);
+    if (!mini && state.queueOpen)     setQueueOpen(false);
+    if (mini  && state.fullQueueOpen) setFullQueueOpen(false);
   }
 
   function setQueueOpen(open) {
@@ -894,8 +909,13 @@
     queueDivider.classList.toggle('visible', open);
   }
 
+  function setFullQueueOpen(open) {
+    state.fullQueueOpen = open;
+    queuePanel.classList.toggle('open', open);
+    playerEl.classList.toggle('queue-open', open);
+  }
+
   collapseBtn.addEventListener('click', () => {
-    // If full player with queue open: close queue first, then collapse after its animation finishes
     if (!state.mini && state.fullQueueOpen) {
       setFullQueueOpen(false);
       setTimeout(() => setMini(true), 280);
@@ -904,36 +924,30 @@
     }
   });
 
-  // ─── Double-click on empty space ───────────────────
-  // Mini mode: toggle mini queue
-  // Full mode: toggle full queue panel (not when clicking on queue panel itself)
+  // ─── Double-click: toggle queue ────────────────────
   document.querySelector('.player-outer').addEventListener('dblclick', (e) => {
     if (e.target.closest('button, [role="button"]')) return;
     if (state.mini) {
       setQueueOpen(!state.queueOpen);
-    } else {
-      if (!e.target.closest('.queue-panel')) {
-        setFullQueueOpen(!state.fullQueueOpen);
-      }
+    } else if (!e.target.closest('.queue-panel')) {
+      setFullQueueOpen(!state.fullQueueOpen);
     }
   });
 
   // ─── Controls ──────────────────────────────────────
-  playBtn.addEventListener('click', () => {
-    state.playing = !state.playing;
-    renderPlayState();
-    if (state.playing) startTicker();
-    else clearInterval(ticker);
+  playBtn.addEventListener('click', () => { if (widget) widget.toggle(); });
+
+  nextBtn.addEventListener('click', () => {
+    if (!widget) return;
+    widget.skip(state.shuffle ? shuffleNext() : (state.index + 1) % Math.max(tracks.length, 1));
   });
 
-  nextBtn.addEventListener('click', () => advance());
-
   prevBtn.addEventListener('click', () => {
+    if (!widget) return;
     if (state.currentTime > 3) {
-      state.currentTime = 0;
-      renderProgress();
+      widget.seekTo(0);
     } else {
-      loadTrack((state.index - 1 + tracks.length) % tracks.length, state.playing);
+      widget.skip((state.index - 1 + Math.max(tracks.length, 1)) % Math.max(tracks.length, 1));
     }
   });
 
@@ -962,10 +976,7 @@
   });
 
   document.addEventListener('mouseup', () => {
-    if (state.dragging) {
-      state.dragging = false;
-      progressBar.classList.remove('dragging');
-    }
+    if (state.dragging) { state.dragging = false; progressBar.classList.remove('dragging'); }
   });
 
   progressBar.addEventListener('touchstart', (e) => {
@@ -983,20 +994,18 @@
   });
 
   document.addEventListener('touchend', () => {
-    if (state.dragging) {
-      state.dragging = false;
-      progressBar.classList.remove('dragging');
-    }
+    if (state.dragging) { state.dragging = false; progressBar.classList.remove('dragging'); }
   });
 
   // ─── Keyboard Shortcuts ────────────────────────────
   document.addEventListener('keydown', (e) => {
     if (e.target.matches('input, textarea')) return;
+    const t = tracks[state.index];
     switch (e.code) {
       case 'Space':      e.preventDefault(); playBtn.click(); break;
-      case 'ArrowRight': e.preventDefault(); state.currentTime = clamp(state.currentTime + 5, 0, tracks[state.index].duration); renderProgress(); break;
-      case 'ArrowLeft':  e.preventDefault(); state.currentTime = clamp(state.currentTime - 5, 0, tracks[state.index].duration); renderProgress(); break;
-      case 'KeyN':       advance(); break;
+      case 'ArrowRight': e.preventDefault(); if (t && widget) { const s = clamp(state.currentTime + 5, 0, t.duration); widget.seekTo(s * 1000); state.currentTime = s; renderProgress(); } break;
+      case 'ArrowLeft':  e.preventDefault(); if (t && widget) { const s = clamp(state.currentTime - 5, 0, t.duration); widget.seekTo(s * 1000); state.currentTime = s; renderProgress(); } break;
+      case 'KeyN':       nextBtn.click(); break;
       case 'KeyP':       prevBtn.click(); break;
       case 'KeyL':       likeBtn.click(); break;
       case 'KeyS':       shuffleBtn.click(); break;
@@ -1005,9 +1014,9 @@
   });
 
   // ─── Init ──────────────────────────────────────────
-  renderTrack();
+  renderTrack();   // shows "Loading…" until SC is ready
   renderPlayState();
-  startTicker();
+  initWidget();
 </script>
 </body>
 </html>
