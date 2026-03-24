@@ -126,6 +126,26 @@
       opacity: 0.5;
     }
 
+    @media (max-width: 480px) {
+      #app-container {
+        width: calc(100vw - 20px);
+        height: calc(100vh - 20px);
+      }
+      #weather-widget {
+        bottom: 10px;
+        left: 10px;
+        gap: 6px;
+      }
+      #weather-dot {
+        width: 8px;
+        height: 8px;
+      }
+      #weather-condition,
+      #weather-location {
+        font-size: 10px;
+      }
+    }
+
     /* ─── Player outer wrapper ────────────────────── */
     .player-outer {
       display: flex;
